@@ -1,10 +1,9 @@
 """Image scraper service with API-based sources and ddgs web search.
 
 Sources:
-  - ddgs (DuckDuckGo/Bing/Google image search via proxy)
+  - ddgs (Google/Bing/DuckDuckGo image search via proxy)
   - Pixabay API (free, datacenter-safe)
   - Unsplash API (free, datacenter-safe)
-  - Flickr API (free, CC-only filtering)
 
 Called by n8n's Image Sourcing subworkflow as Tier 2 fallback.
 
@@ -15,15 +14,12 @@ Endpoints:
 Environment variables:
   PIXABAY_API_KEY   — Pixabay API key (free: https://pixabay.com/api/docs/)
   UNSPLASH_ACCESS_KEY — Unsplash API key (free: https://unsplash.com/developers)
-  FLICKR_API_KEY    — Flickr API key (free: https://www.flickr.com/services/api/misc.api_keys.html)
   PROXY             — Proxy URL for ddgs (e.g. socks5://user:pass@host:port or http://host:port)
   MAX_RESULTS       — Max results per source (default: 10)
   TIMEOUT           — Request timeout in seconds (default: 30)
 """
 
 import os
-import base64
-import hashlib
 import sys
 from flask import Flask, request, jsonify
 
@@ -37,9 +33,6 @@ PROXY = os.environ.get('PROXY', '')
 
 PIXABAY_API_KEY = os.environ.get('PIXABAY_API_KEY', '')
 UNSPLASH_ACCESS_KEY = os.environ.get('UNSPLASH_ACCESS_KEY', '')
-FLICKR_API_KEY = os.environ.get('FLICKR_API_KEY', '')
-
-FLICKR_CC_LICENSES = '1,2,3,4,5,6,9,10'
 
 
 def deduplicate_results(results):
@@ -114,7 +107,7 @@ def scrape_pixabay(query, max_results):
                 'title': hit.get('tags', ''),
                 'width': hit.get('imageWidth', 0),
                 'height': hit.get('imageHeight', 0),
-                'license': 'pixabay',  # Pixabay License = free for commercial use
+                'license': 'pixabay',
             })
         return results
     except Exception as e:
@@ -146,55 +139,11 @@ def scrape_unsplash(query, max_results):
                 'title': item.get('alt_description', item.get('description', '')),
                 'width': item.get('width', 0),
                 'height': item.get('height', 0),
-                'license': 'unsplash',  # Unsplash License = free for commercial use
+                'license': 'unsplash',
             })
         return results
     except Exception as e:
         app.logger.warning(f"Unsplash failed: {e}")
-        return []
-
-
-def scrape_flickr(query, max_results, license_filter='cc'):
-    """Search Flickr via official API with CC license filtering."""
-    import requests as req_lib
-    if not FLICKR_API_KEY:
-        return []
-    try:
-        url = (
-            f"https://www.flickr.com/services/rest/"
-            f"?method=flickr.photos.search"
-            f"&api_key={FLICKR_API_KEY}"
-            f"&text={query}"
-            f"&per_page={max_results}"
-            f"&format=json&nojsoncallback=1"
-            f"&sort=relevance"
-            f"&content_type=1"
-        )
-        if license_filter == 'cc':
-            url += f"&license={FLICKR_CC_LICENSES}"
-
-        resp = req_lib.get(url, timeout=TIMEOUT)
-        data = resp.json()
-        results = []
-        for photo in data.get('photos', {}).get('photo', [])[:max_results]:
-            img_url = (
-                f"https://farm{photo['farm']}.staticflickr.com/"
-                f"{photo['server']}/{photo['id']}_{photo['secret']}_z.jpg"
-            )
-            results.append({
-                'url': img_url,
-                'thumbnail': img_url.replace('_z.jpg', '_q.jpg'),
-                'source': 'flickr',
-                'title': photo.get('title', ''),
-                'width': 0,
-                'height': 0,
-                'license': 'cc' if license_filter == 'cc' else 'unknown',
-                'photo_id': photo['id'],
-                'owner': photo.get('owner', ''),
-            })
-        return results
-    except Exception as e:
-        app.logger.warning(f"Flickr failed: {e}")
         return []
 
 
@@ -204,7 +153,6 @@ SOURCE_HANDLERS = {
     'duckduckgo': lambda q, m, l: scrape_ddgs(q, m, 'duckduckgo'),
     'pixabay': lambda q, m, l: scrape_pixabay(q, m),
     'unsplash': lambda q, m, l: scrape_unsplash(q, m),
-    'flickr': lambda q, m, l: scrape_flickr(q, m, l),
 }
 
 
@@ -216,7 +164,7 @@ def search():
       {
         "query": "worried families grocery prices",
         "max_results": 5,
-        "sources": ["google", "bing", "pixabay", "unsplash", "flickr"],
+        "sources": ["google", "bing", "pixabay", "unsplash"],
         "license": "cc"
       }
 
@@ -230,7 +178,7 @@ def search():
     data = request.get_json(force=True)
     query = data.get('query', '')
     max_results = min(int(data.get('max_results', 5)), MAX_RESULTS)
-    sources = data.get('sources', ['pixabay', 'unsplash', 'flickr'])
+    sources = data.get('sources', ['pixabay', 'unsplash'])
     license_filter = data.get('license', 'cc')
 
     if not query:
@@ -267,7 +215,6 @@ def health():
         'api_keys': {
             'pixabay': bool(PIXABAY_API_KEY),
             'unsplash': bool(UNSPLASH_ACCESS_KEY),
-            'flickr': bool(FLICKR_API_KEY),
         }
     })
 
